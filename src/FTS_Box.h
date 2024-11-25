@@ -24,9 +24,10 @@ class FTS_Box : public Box {
         double Nr;          // Reference chain length used to non-dimensionalize fields
         double C;           // System concentration
         int chemFieldFreq;  // Frequency to write potential fields
+        int start_step;        //where the output step starts
+        //int log_flag;       //Indicator whether to output data logrithmly
         std::complex<double> Heff;  // Effective Hamiltonian
         double tolerance, Hold;   // Convergence tolerance, old real part of Heff for SCFT simulation
-        int PCflag;         // Flag for using predictor-corrector methods
         
         
         std::vector<FTS_Species> Species;       // Contains the density of each species
@@ -41,6 +42,9 @@ class FTS_Box : public Box {
         void doTimeStep(int);
         void initializeSim() override;
         void writeSpeciesDensityFields();
+        void writeSpeciesDensityFields0(int step);
+        void writeSpeciesPotentialFields(int step);
+        void renameOutputFiles(int step);
         void writeData(int) override;
         void computeHamiltonian();
         void writeFields() override;

@@ -18,6 +18,25 @@ FTS_Potential* FTS_PotentialFactory(std::istringstream&, FTS_Box*);
 // then populating species densities
 void FTS_Box::doTimeStep(int step) {
 
+    /////////////////
+    // I/O section //
+    /////////////////
+
+    // Write the species densities
+    if (step >= this->start_step && densityFieldFreq > 0 && (step - this->start_step) % densityFieldFreq == 0) {
+        writeSpeciesDensityFields0(step);
+    }
+
+    // Write the species potentials
+    if (step >= this->start_step && chemFieldFreq > 0 && (step - this->start_step) % chemFieldFreq == 0) {
+        writeSpeciesPotentialFields(step);
+    }
+
+    // Write log data
+    if (step % logFreq == 0) {
+        writeData(step);
+    }
+    
     // Update the potential fields
     for ( int i=0 ; i<Potentials.size(); i++ ) {
         int ti = time(0);
@@ -25,7 +44,7 @@ void FTS_Box::doTimeStep(int step) {
         fieldUpdateTimer += time(0) - ti;
     }
     
-    // Zero the species densities and rebuilt the fields
+    // Zero the species densities and rebuild the fields
     for ( int i=0 ; i<Species.size(); i++ ) {
         int ti = time(0);
         Species[i].zeroDensity();
@@ -39,64 +58,7 @@ void FTS_Box::doTimeStep(int step) {
         Molecs[i]->calcDensity();
         moleculeTimer += time(0) - ti;
     }
-
-
-    // If using predictor-corrector scheme, repeat above with predicted
-    // densities and forces
-    if ( PCflag == 1 ) {
-        // Update the potential fields with corrector step
-        for ( int i=0 ; i<Potentials.size(); i++ ) {
-            int ti = time(0);
-            Potentials[i]->correctFields();
-            fieldUpdateTimer += time(0) - ti;
-        }
-        
-        // Zero the species densities and rebuilt the fields
-        for ( int i=0 ; i<Species.size(); i++ ) {
-            int ti = time(0);
-            Species[i].zeroDensity();
-            Species[i].buildPotentialField();
-            speciesTimer += time(0) - ti;
-        }
-
-        // Recalculate all density fields, including populating species densities
-        for ( int i=0 ; i<Molecs.size(); i++ ) {
-            int ti = time(0);
-            Molecs[i]->calcDensity();
-            moleculeTimer += time(0) - ti;
-        }        
-    }
-
-
-    /////////////////
-    // I/O section //
-    /////////////////
-
-    // Write the species densities
-    if ( densityFieldFreq > 0 && step % densityFieldFreq == 0 ) {
-        for ( int i=0 ; i<Species.size(); i++ ) {
-            Species[i].writeDensity(i);
-        }
-    }
-    
-    // Write the species densities
-    if ( chemFieldFreq > 0 && step % chemFieldFreq == 0 ) {
-        for ( int i=0 ; i<Potentials.size(); i++ ) {
-            Potentials[i]->writeFields(i);
-        }
-        for ( int i=0 ; i<Species.size(); i++ ) {
-            Species[i].writeSpeciesFields(i);
-        }
-    }
-
-
-    // Write log data
-    if ( step % logFreq == 0 ) {
-        writeData(step);
-    }
-
 }
-
 
 // Write Hamiltonian terms to output file
 void FTS_Box::writeData(int step) {
@@ -215,9 +177,9 @@ void FTS_Box::readInput(std::ifstream& inp) {
     maxSteps = 10000;
     chemFieldFreq = 0;
     densityFieldFreq = 0;
+    start_step = 0;
     Hold = 1.0E8;       // Arbitrary large value for old Hamiltonian
     tolerance = 1.0E-5; // Arbitrary small value for convergance tolerance
-    PCflag = 0;
 
     std::string line, firstWord;
 
@@ -253,7 +215,11 @@ void FTS_Box::readInput(std::ifstream& inp) {
             else if ( firstWord == "chemFieldFreq" || firstWord == "chemfieldfreq" ) { iss >> chemFieldFreq; }
 
             else if ( firstWord == "densityFieldFreq" || firstWord == "densityfieldfreq" ) { iss >> densityFieldFreq; }
-
+            
+            else if (firstWord == "startStep" || firstWord == "startstep") {
+                iss >> start_step;
+            }
+            
             else if ( firstWord == "Dim" ) {
                 iss >> Dim;
                 setDimension(Dim);
@@ -302,10 +268,7 @@ void FTS_Box::readInput(std::ifstream& inp) {
             }
 
             else if (firstWord == "randSeed" || firstWord == "RAND_SEED") {
-                std::cout << idum << " Before " << std::endl;
-                fflush(stdout);
                 iss >> idum;
-                std::cout << idum << " after " << std::endl;
             }
 
             else if (firstWord == "rho0") {
@@ -363,7 +326,7 @@ void FTS_Box::readInput(std::ifstream& inp) {
         std::cout << "Using Nr = " << Nr << ", computed C = " << C << std::endl;
     }
     else if ( C > 0 ) {
-        rho0 = C * Rg * Rg * Rg / Nr;
+        rho0 = C * Rg * Rg / Nr; //For 2D system * Rg / Nr;
         std::cout << "Using Nr = " << Nr << ", computed rho0 = " << rho0 << " [b^-3]" << std::endl;
     }
 
@@ -480,6 +443,70 @@ void FTS_Box::initSmearGaussian(
     }
 }
 
+
+// Write the species densities
+void FTS_Box::writeSpeciesDensityFields0(int step) {
+    char nm[40];
+    sprintf(nm, "Density_Data_tmp.dat");
+    FILE* otp = fopen(nm, "a");
+
+    for (int i = 0; i < M; i++) {
+        // get and write the position information
+        double *r = new double[Dim];
+        get_r(i, r);
+        for (int j = 0; j < Dim; j++) {
+            fprintf(otp, "%lf ", r[j]);
+        }
+        delete[] r;
+
+        // write the density information
+        for (int j = 0; j < Species.size(); j++) {
+            thrust::host_vector<thrust::complex<double>> htmp = Species[j].d_density;
+            fprintf(otp, "%1.4e ", htmp[i].real());
+        }
+        fprintf(otp, "\n");
+    }
+    fprintf(otp, "\n\n");
+    fclose(otp);
+}
+
+void FTS_Box::writeSpeciesPotentialFields(int step) {
+    char nm[40];
+    sprintf(nm, "Potential_Data_tmp.dat");
+    FILE* otp = fopen(nm, "a");
+
+    for (int i = 0; i < M; i++) {
+        // get and write the position information
+        double *r = new double[Dim];
+        get_r(i, r);
+        for (int j = 0; j < Dim; j++) {
+            fprintf(otp, "%lf ", r[j]);
+        }
+        delete[] r;
+
+        // write in potential data for each species
+        for (int j = 0; j < Species.size(); j++) {
+            thrust::host_vector<thrust::complex<double>> htmp = Species[j].d_w;  
+            fprintf(otp, "%1.4e ", htmp[i].real());
+        }
+        fprintf(otp, "\n");
+    }
+    fprintf(otp, "\n\n");
+    fclose(otp);
+}
+
+// Rename the tmp output files to include step and freq information
+void FTS_Box::renameOutputFiles(int step) {
+    char newNameDensity[100];
+    char newNamePotential[100];
+
+    // Incorporate start_step, densityFieldFreq, and chemFieldFreq into the filename
+    sprintf(newNameDensity, "DensityData_Step%d_to_%d_Freq_%d.dat", this->start_step, step, densityFieldFreq);
+    sprintf(newNamePotential, "PotentialData_Step%d_to_%d_Freq_%d.dat", this->start_step, step, chemFieldFreq);
+
+    rename("Density_Data_tmp.dat", newNameDensity);
+    rename("Potential_Data_tmp.dat", newNamePotential);
+}
 
 // Write the species densities
 void FTS_Box::writeSpeciesDensityFields() {
