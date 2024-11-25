@@ -105,7 +105,6 @@ void FTS_Species::buildPotentialField() {
     // }
 }
 
-
 // Writes the density field to a text file
 void FTS_Species::writeDensity(const int id) {
     char nm[40];
@@ -126,3 +125,51 @@ void FTS_Species::writeSpeciesFields(const int id) {
     box->writeTComplexGridData(std::string(nm), htmp);
 
 }
+
+
+
+/*
+// Writes the density field to a text file
+void FTS_Species::writeDensity(const int id) {
+    char nm[40];
+
+    sprintf(nm, "rhoSpecies%d_step%d.dat", id, currentdenStep);
+    
+    // Transfer data to host
+    density = d_density;
+    box->writeTComplexGridData(std::string(nm), density);
+}
+
+
+// Writes the total field acting on a particular species
+void FTS_Species::writeSpeciesFields(const int id) {
+    char nm[40];
+    sprintf(nm, "fieldSpecies%d_step%d.dat", id, currentchemStep);
+    thrust::host_vector<thrust::complex<double>> htmp = d_w;
+    box->writeTComplexGridData(std::string(nm), htmp);
+
+}
+*/
+
+/*
+// Writes the density field to a text file
+void FTS_Species::writeDensity(const int id) {
+    char nm[40];
+    sprintf(nm, "DensityData_steps0to%d_freq%d.dat", step, densityFieldFreq);
+    FILE* otp = fopen(name.c_str(), "a");
+    thrust::host_vector<thrust::complex<double>> htmp = d_density;
+    box->writeTComplexGridData(std::string(nm), htmp);
+    fclose(otp);
+}
+
+
+
+void FTS_Species::writeSpeciesFields(const int id) {
+    char nm[40];
+    sprintf(nm, "PotentialData_steps0to%d_freq%d.dat", step, chemFieldFreq);
+    FILE* otp = fopen(name.c_str(), "a");
+    thrust::host_vector<thrust::complex<double>> htmp = d_w;
+    box->writeTComplexGridData(std::string(nm), htmp);
+    fclose(otp);
+}
+*/
