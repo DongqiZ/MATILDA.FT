@@ -10,7 +10,6 @@
 #include <thrust/copy.h>
 #include "FTS_Box.h"
 #include "fts_species.h"
-void die(const char*);
 
 LinearMolec::~LinearMolec(){}
 
@@ -26,7 +25,6 @@ LinearMolec::LinearMolec(std::istringstream& iss, FTS_Box* p_box) : FTS_Molec(is
     iss >> numBlocks;
 
     Ntot = 0;
-    doSmear = 0;
     blockSpecies.resize(numBlocks);
     intSpecies.resize(numBlocks);
     d_intSpecies.resize(numBlocks);
@@ -43,29 +41,6 @@ LinearMolec::LinearMolec(std::istringstream& iss, FTS_Box* p_box) : FTS_Molec(is
         iss >> blockSpecies[j];
 
         Ntot += N[j];
-    }
-
-    if ( iss.tellg() != -1 ) {
-        std::string s1;
-        iss >> s1;
-        if ( s1 == "smear" || s1 == "Smear" ) {
-            iss >> s1 ; 
-            doSmear = 1;
-            if ( s1 == "Gaussian" || s1 == "gaussian" ) {
-                iss >> smearLength;
-                std::cout << "Smearing with unit Gaussian with width " << smearLength << std::endl;
-
-                smearFunc.resize(mybox->M);
-                d_smearFunc.resize(mybox->M);
-
-                // initializes Gaussian smear in k-space
-                mybox->initSmearGaussian(smearFunc, 1.0, smearLength);
-                mybox->writeTComplexGridData("smearGaussian.dat", smearFunc);
-                
-                // Send smear to the device
-                d_smearFunc = smearFunc;
-            }
-        }
     }
 
     // Copy block lengths to device
@@ -86,6 +61,7 @@ LinearMolec::LinearMolec(std::istringstream& iss, FTS_Box* p_box) : FTS_Molec(is
             break;
         }
     }
+    //std::cout << "Is molecule symmetric: " << isSymmetric << std::endl;
 
     // Determine integer block Species
     for ( int j=0 ; j<numBlocks; j++ ) {
@@ -143,15 +119,10 @@ void LinearMolec::calcPropagators() {
     // Calculate forward propagator //
     //////////////////////////////////
     int ind=0;
-
+    //loop the blocks 
     for ( int b=0 ; b<numBlocks ; b++ ) {
-        if ( doSmear ) {
-            mybox->convolveTComplexDouble(mybox->Species[intSpecies[b]].d_w, 
-                W, d_smearFunc);
-        }
-        else {
-            W = mybox->Species[intSpecies[b]].d_w;
-        }
+        W = mybox->Species[intSpecies[b]].d_w;
+
     
         // expW = exp(-W)
         thrust::transform(W.begin(), W.end(), expW.begin(), NegExponential()); 
@@ -207,13 +178,7 @@ void LinearMolec::calcPropagators() {
         ind=0;
 
         for ( int b=0 ; b<numBlocks ; b++ ) {
-            if ( doSmear ) {
-                mybox->convolveTComplexDouble(mybox->Species[intSpecies[numBlocks-b-1]].d_w, 
-                    W, d_smearFunc);
-            }
-            else {
-                W = mybox->Species[intSpecies[numBlocks-b-1]].d_w;
-            }            
+            W = mybox->Species[intSpecies[numBlocks-b-1]].d_w;
             
             thrust::transform(W.begin(), W.end(), expW.begin(), NegExponential()); 
 
@@ -324,15 +289,7 @@ void LinearMolec::calcDensity() {
 
     // Define total density as juts center density for now. needs to be convolved
     // with shape functions once those are implemented.
-    if ( doSmear ) {
-        // smear the density field
-        mybox->convolveTComplexDouble(d_cDensity, d_density, d_smearFunc);
-    }
-
-    // Not using smearing
-    else {
-        d_density = d_cDensity;
-    }
+    d_density = d_cDensity;
     
 
     // Finally, accumulate density onto the relevant species field
