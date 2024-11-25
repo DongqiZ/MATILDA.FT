@@ -15,17 +15,22 @@ void run_fts_sim() {
 
     box[0]->initializeSim();
 
-
     for ( int step=0 ; step <= box[0]->maxSteps ; step++ ) {
         box[0]->doTimeStep(step);
 
         // Check for convergence if SCFT simulation
         if ( step > 50 && box[0]->converged(step) ) {
             std::cout << "Simulation converged! " << std::endl;
+            box[0]->renameOutputFiles(step);
             break;
+        }
+
+        // Rename output files when maximum steps are reached
+        if (step == box[0]->maxSteps) {
+            box[0]->renameOutputFiles(step);
         }
     }
 
     box[0]->writeTime();
-
 }
+
