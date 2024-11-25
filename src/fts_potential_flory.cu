@@ -14,12 +14,12 @@ double ran2();
 
 // Note: this Flory code will ALWAYS use the multispecies method of 
 // Koski, Chao, Riggleman JCP 2013 even if there are only two species
-// This creates a potentially extraneous field, but makes coding the
+// This creates a potentially redundant field, but makes coding the
 // general case simpler. In our experience, initial field conditions
 // only really "matter" on the wmi field, so al initialize commands
 // apply only to the real part of that field.
 PotentialFlory::PotentialFlory(std::istringstream& iss, FTS_Box* p_box) : FTS_Potential(iss, p_box) {
-    
+
     // Set stringstream to be ready to read kappa
     iss.seekg(0);
     std::string s1;
@@ -52,11 +52,6 @@ PotentialFlory::PotentialFlory(std::istringstream& iss, FTS_Box* p_box) : FTS_Po
     d_wmi.resize(mybox->M, ivalue);
     d_Akmi.resize(mybox->M, ivalue);
     
-    d_rhoI.resize(mybox->M, ivalue);
-    d_rhoJ.resize(mybox->M, ivalue);
-    d_dHdwmi.resize(mybox->M, ivalue);
-    d_dHdwpl.resize(mybox->M, ivalue);
-
     
     updateScheme = "EM";
 
@@ -75,9 +70,12 @@ PotentialFlory::PotentialFlory(std::istringstream& iss, FTS_Box* p_box) : FTS_Po
                 double rAmp, iAmp;
                 iss >> rAmp;
                 iss >> iAmp;
+
                 // Fill host field with random noise
-                for ( int i=0 ; i<mybox->M ; i++ ) {
-                    wmi[i] = std::complex<double>(rAmp * ran2(), iAmp * ran2() );
+                for ( int i = 0 ; i < mybox->M ; i++ ) {
+                    double randValue1 = ran2();
+                    double randValue2 = ran2();
+                    wmi[i] = std::complex<double>(rAmp * randValue1, iAmp * randValue2);
                 }
                 
             }
@@ -94,9 +92,37 @@ PotentialFlory::PotentialFlory(std::istringstream& iss, FTS_Box* p_box) : FTS_Po
                     double r[3];
                     mybox->get_r(i, r);
                     wmi[i] = amp * sin(2.0 * PI * r[dir] * period / mybox->L[dir]);
+                    
                 }
 
             }
+
+            else if (s1 == "readfile") {
+                std::string filename;
+                iss >> filename;
+                std::ifstream file(filename);  // supported from c++ 11
+
+                if (!file.is_open()) {
+                    die(("Unable to open file: " + filename).c_str());
+                }
+
+                // skip the first line (header line)
+                std::string header;
+                std::getline(file, header);
+
+                double x, y, w_helfand, w_flory, w_minus;
+                int i = 0;  // define an index to loop positions 
+                while (file >> x >> y >> w_helfand >> w_flory >> w_minus) {
+                    double wmi_real = w_minus;
+                    double wpl_imag = w_flory;
+
+                    wmi[i] = std::complex<double>(wmi_real, 0.0); // assume imagine part to be 0
+                    wpl[i] = std::complex<double>(0.0, wpl_imag); // assume real part to be 0
+                    i++;  // Update index 
+                }
+                file.close();
+            }
+
 
             else {
                 die("Invalid initialize option on potential Flory");
@@ -114,29 +140,20 @@ PotentialFlory::PotentialFlory(std::istringstream& iss, FTS_Box* p_box) : FTS_Po
         }
     }// optional arguments
 
-    // Allocate storage for predicted forces, fields if doing predictor-corrector scheme
-    if (updateScheme == "EMPC" ) {
-        d_dHdwmio.resize(mybox->M, ivalue);
-        d_dHdwplo.resize(mybox->M, ivalue);        
-        d_wmio.resize(mybox->M, ivalue);
-        d_wplo.resize(mybox->M, ivalue);
-
-        // ensure PC flag set to TRUE.
-        mybox->PCflag = 1;
-    }
 
     // transfer to device
     d_wpl = wpl;
     d_wmi = wmi;
     
-}// PotentialFlory constructor
+}
 
 
-
-// Updates potential fields using the chosen scheme
-// If two-part predictor/corrector scheme is to be used, then 
-// this step is the predictor step
 void PotentialFlory::updateFields() {
+
+    thrust::device_vector<thrust::complex<double>> d_rhoI(mybox->M);
+    thrust::device_vector<thrust::complex<double>> d_rhoJ(mybox->M);
+    thrust::device_vector<thrust::complex<double>> d_dHdwpl(mybox->M);
+    thrust::device_vector<thrust::complex<double>> d_dHdwmi(mybox->M);
 
     // Assign species I and J
     for ( int i=0 ; i<mybox->Species.size() ; i++ ) {
@@ -153,19 +170,14 @@ void PotentialFlory::updateFields() {
     cuDoubleComplex* _d_wmi = (cuDoubleComplex*)thrust::raw_pointer_cast(d_wmi.data());
 
 
+
     // Forces are generated in real space
     d_makeFloryForce<<<mybox->M_Grid, mybox->M_Block>>>(_d_dHdwpl, _d_dHdwmi, _d_wpl,
         _d_wmi, _d_rhoI, _d_rhoJ, mybox->C, chiN, mybox->Nr, mybox->M);
 
 
-    // If doing predictor/corrector scheme
-    if ( updateScheme == "EMPC" ) {
-        storePredictorData();
-    }
-
-
     // Update the fields
-    if ( updateScheme == "EM" || updateScheme == "EMPC" ) {
+    if ( updateScheme == "EM" ) {
         d_fts_updateEM<<<mybox->M_Grid, mybox->M_Block>>>(_d_wpl, _d_dHdwpl, deltPlus, mybox->M);
         d_fts_updateEM<<<mybox->M_Grid, mybox->M_Block>>>(_d_wmi, _d_dHdwmi, deltMinus, mybox->M);
     }
@@ -193,54 +205,7 @@ void PotentialFlory::updateFields() {
 
     }
 
-}// Update the fields
-
-
-void PotentialFlory::correctFields() {
-    if ( updateScheme != "EMPC" ) {
-        return;
-    }
-
-    // Assign species I and J
-    for ( int i=0 ; i<mybox->Species.size() ; i++ ) {
-        if ( actsOn[0] == mybox->Species[i].fts_species ) { d_rhoI = mybox->Species[i].d_density; }
-        else if ( actsOn[1] == mybox->Species[i].fts_species ) { d_rhoJ = mybox->Species[i].d_density; }
-    }
-
-    // Pointers to the thrust data
-    cuDoubleComplex* _d_dHdwpl = (cuDoubleComplex*)thrust::raw_pointer_cast(d_dHdwpl.data());
-    cuDoubleComplex* _d_dHdwmi = (cuDoubleComplex*)thrust::raw_pointer_cast(d_dHdwmi.data());
-    cuDoubleComplex* _d_rhoI = (cuDoubleComplex*)thrust::raw_pointer_cast(d_rhoI.data());
-    cuDoubleComplex* _d_rhoJ = (cuDoubleComplex*)thrust::raw_pointer_cast(d_rhoJ.data());
-    cuDoubleComplex* _d_wpl = (cuDoubleComplex*)thrust::raw_pointer_cast(d_wpl.data());
-    cuDoubleComplex* _d_wmi = (cuDoubleComplex*)thrust::raw_pointer_cast(d_wmi.data());
-    cuDoubleComplex* _d_wplo = (cuDoubleComplex*)thrust::raw_pointer_cast(d_wplo.data());
-    cuDoubleComplex* _d_wmio = (cuDoubleComplex*)thrust::raw_pointer_cast(d_wmio.data());
-    cuDoubleComplex* _d_dHdwplo = (cuDoubleComplex*)thrust::raw_pointer_cast(d_dHdwplo.data());
-    cuDoubleComplex* _d_dHdwmio = (cuDoubleComplex*)thrust::raw_pointer_cast(d_dHdwmio.data());
-
-    // Forces are generated in real space
-    d_makeFloryForce<<<mybox->M_Grid, mybox->M_Block>>>(_d_dHdwpl, _d_dHdwmi, _d_wpl,
-        _d_wmi, _d_rhoI, _d_rhoJ, mybox->C, chiN, mybox->Nr, mybox->M);
-
-    // Update the fields
-    d_fts_updateEMPC<<<mybox->M_Grid, mybox->M_Block>>>(_d_wpl, _d_wplo, _d_dHdwpl, _d_dHdwplo, deltPlus, mybox->M);
-    d_fts_updateEMPC<<<mybox->M_Grid, mybox->M_Block>>>(_d_wmi, _d_wmio, _d_dHdwmi, _d_dHdwmio, deltMinus, mybox->M);
-
 }
-
-
-
-// If using predictor/corrector methods, store the force and the field 
-// used to make the predicted field configuration
-void PotentialFlory::storePredictorData() {
-    d_wmio = d_wmi;
-    d_wplo = d_wpl;
-    d_dHdwmio = d_dHdwmi;
-    d_dHdwplo = d_dHdwpl;
-}
-
-
 
 std::complex<double> PotentialFlory::calcHamiltonian() {
     
